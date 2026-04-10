@@ -1,0 +1,9 @@
+{
+  "clockify_api_key": "REPLACE_WITH_YOUR_CLOCKIFY_API_KEY",
+  "clockify_workspace_id": "REPLACE_WITH_WORKSPACE_ID",
+  "clockify_project_id": "REPLACE_WITH_PROJECT_ID",
+  "clockify_task_id": "REPLACE_WITH_TASK_ID",
+  "clockify_project_label": "Development / Project",
+  "timezone": "Europe/Lisbon",
+  "workday_start_hour": 9
+}
