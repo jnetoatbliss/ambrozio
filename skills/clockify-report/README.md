@@ -1,12 +1,13 @@
 # clockify-report
 
-Claude Code skill that fills in your weekly Clockify timesheet from the Jira tickets assigned to you. It pulls issues via the Atlassian MCP, distributes 8h/day across them (weighted by each ticket's last `updated` date), and posts the entries to Clockify under the project/task you're allocated to.
+Claude Code skill that fills in your weekly Clockify timesheet from the Jira tickets assigned to you. It pulls issues via the Atlassian MCP, packs them sequentially into weekdays (1 ticket / 8h block per day by default), and posts the entries to Clockify under the project/task you're allocated to.
 
 ## What it does
 
 - **Description** is built as `BLAC-XXXX - <Jira summary>` for each entry.
 - **Project / Task** are pre-configured by IDs in `config.json` (no fragile name lookups).
-- **Distribution**: per weekday, the script weights each ticket using exponential decay from its Jira `updated` date (1-day half-life), normalizes to 8h, and rounds to 15-minute slots. Tickets you touched on Friday lean toward Friday; tickets touched on Monday lean toward Monday.
+- **Distribution**: tickets are sorted by Jira `updated` ascending (oldest first), then chunked into weekday buckets of up to `--max-per-day` tickets. Default is **1 ticket per day** (8h block), matching a "finish one, then go to next" workflow. Use `--max-per-day 2` to pair tickets at 4h each.
+- **Filtering**: tickets in Jira status `To Do` are excluded by Claude at the JQL step — they haven't been started, so they shouldn't get logged time.
 - **Safety**: refuses to post on any weekday that already has Clockify entries unless `--force` is passed.
 
 ## Layout
@@ -88,7 +89,7 @@ In any Claude Code session, just ask:
 
 Claude will:
 1. Look up your accessible Atlassian sites and your account.
-2. Run a JQL like `project = BLAC AND assignee = currentUser() AND updated >= "<monday>"`.
+2. Run a JQL like `project = BLAC AND assignee = currentUser() AND status != "To Do" AND updated >= "<monday>" ORDER BY updated ASC`.
 3. Build `/tmp/clockify-week.json` with the issues.
 4. Run `report.py --dry-run` and show you the plan.
 5. Wait for your confirmation, then re-run without `--dry-run`.
@@ -124,6 +125,7 @@ python3 scripts/report.py --issues-json /tmp/clockify-week.json
 |---|---|---|
 | `--issues-json PATH` | — | path to the input JSON, or `-` for stdin |
 | `--hours-per-day N` | `8.0` | total hours to distribute per weekday |
+| `--max-per-day N` | `1` | max tickets logged per weekday; `2` pairs them at 4h each |
 | `--dry-run` | off | print the plan without writing to Clockify |
 | `--force` | off | post even if a day already has Clockify entries |
 

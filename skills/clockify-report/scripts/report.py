@@ -132,29 +132,32 @@ def issue_updated_date(issue: dict, tz: ZoneInfo) -> date | None:
     return dt.astimezone(tz).date()
 
 
-def day_weights(issues: list[dict], day: date, tz: ZoneInfo, half_life_days: float = 1.0) -> list[float]:
-    """Weight each issue for a given day using exponential decay from its `updated` date.
+def chunk_issues_into_days(issues: list[dict], num_days: int, max_per_day: int = 2) -> list[list[dict]]:
+    """Pack issues into `num_days` buckets with up to `max_per_day` issues each.
 
-    Issues updated on `day` get weight 1.0; weight halves every `half_life_days` of distance.
-    Issues without an `updated` field get a flat low weight so they still get some time.
+    Front-loads days to `max_per_day` items, leaving fewer-item buckets at the end.
+    Order is preserved (caller is expected to sort by Jira `updated` ascending so
+    older work lands earlier in the week — matching "finish one, then next").
     """
-    weights: list[float] = []
-    for issue in issues:
-        u = issue_updated_date(issue, tz)
-        if u is None:
-            weights.append(0.25)
-            continue
-        distance = abs((day - u).days)
-        weights.append(0.5 ** (distance / half_life_days))
-    total = sum(weights)
-    if total == 0:
-        n = len(issues)
-        return [1.0 / n] * n
-    return [w / total for w in weights]
-
-
-def round_to_quarter(hours: float) -> float:
-    return round(hours * 4) / 4
+    if num_days <= 0:
+        return []
+    n = len(issues)
+    if n > num_days * max_per_day:
+        raise ValueError(
+            f"too many issues ({n}) for {num_days} days at max {max_per_day}/day; "
+            f"raise --max-per-day or trim the list"
+        )
+    if n <= num_days:
+        sizes = [1] * n + [0] * (num_days - n)
+    else:
+        extras = n - num_days
+        sizes = [2 if i < extras else 1 for i in range(num_days)]
+    chunks: list[list[dict]] = []
+    cursor = 0
+    for size in sizes:
+        chunks.append(issues[cursor : cursor + size])
+        cursor += size
+    return chunks
 
 
 def plan_week(
@@ -165,38 +168,39 @@ def plan_week(
     hours_per_day: float,
     tz: ZoneInfo,
     day_start_hour: int,
+    max_per_day: int = 2,
 ) -> list[PlannedEntry]:
     if not issues:
         return []
-    plan: list[PlannedEntry] = []
+
     today = date.today()
+    weekdays: list[date] = []
     for offset in range((week_end - week_start).days + 1):
         day = week_start + timedelta(days=offset)
-        if day > today or day.weekday() >= 5:
+        if day.weekday() >= 5 or day > today:
             continue
+        weekdays.append(day)
+    if not weekdays:
+        return []
 
-        weights = day_weights(issues, day, tz)
-        raw = [w * hours_per_day for w in weights]
-        rounded = [round_to_quarter(h) for h in raw]
-        drift = round_to_quarter(hours_per_day - sum(rounded))
-        if drift != 0:
-            top = max(range(len(rounded)), key=lambda i: raw[i])
-            rounded[top] += drift
+    sorted_issues = sorted(issues, key=lambda i: issue_updated_date(i, tz) or date.min)
+    chunks = chunk_issues_into_days(sorted_issues, len(weekdays), max_per_day)
 
+    plan: list[PlannedEntry] = []
+    for day, day_issues in zip(weekdays, chunks):
+        if not day_issues:
+            continue
+        per_issue = hours_per_day / len(day_issues)
         cursor = datetime.combine(day, datetime.min.time(), tzinfo=tz).replace(hour=day_start_hour)
-        for issue, hours in zip(issues, rounded):
-            if hours <= 0:
-                continue
-            key = issue["key"]
-            summary = issue["summary"].strip()
-            end = cursor + timedelta(hours=hours)
+        for issue in day_issues:
+            end = cursor + timedelta(hours=per_issue)
             plan.append(
                 PlannedEntry(
                     day=day,
                     start=cursor,
                     end=end,
-                    description=f"{key} - {summary}",
-                    issue_key=key,
+                    description=f"{issue['key']} - {issue['summary'].strip()}",
+                    issue_key=issue["key"],
                     task_id=task_id,
                 )
             )
@@ -257,6 +261,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Post Clockify time entries from a Jira issue list")
     parser.add_argument("--issues-json", help="Path to issues JSON (use '-' or omit for stdin)")
     parser.add_argument("--hours-per-day", type=float, default=8.0)
+    parser.add_argument("--max-per-day", type=int, default=1, help="max tickets per weekday (default 1)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true", help="create entries even if day already has logged time")
     args = parser.parse_args()
@@ -277,7 +282,16 @@ def main() -> None:
     workspace_id, user_id, project_id, task_id = resolve_workspace_and_project(cfg)
     print(f"clockify: workspace={workspace_id} project={project_id} task={task_id}")
 
-    plan = plan_week(issues, task_id, week_start, week_end, args.hours_per_day, tz, cfg.get("workday_start_hour", 9))
+    plan = plan_week(
+        issues,
+        task_id,
+        week_start,
+        week_end,
+        args.hours_per_day,
+        tz,
+        cfg.get("workday_start_hour", 9),
+        max_per_day=args.max_per_day,
+    )
     print_plan(plan)
 
     if args.dry_run:

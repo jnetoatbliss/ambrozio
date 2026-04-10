@@ -10,9 +10,9 @@ Automates weekly Clockify time entries from Jira tickets assigned to the user.
 ## Flow
 1. **Fetch issues** via the Atlassian MCP (`mcp__atlassian__getAccessibleAtlassianResources` → `mcp__atlassian__searchJiraIssuesUsingJql`) using JQL like:
    ```
-   project = BLAC AND assignee = currentUser() AND updated >= "<monday>" ORDER BY updated DESC
+   project = BLAC AND assignee = currentUser() AND status != "To Do" AND updated >= "<monday>" ORDER BY updated ASC
    ```
-   Default project is `BLAC` (BLACKROLL). Use the cloudId returned by the resources tool.
+   Default project is `BLAC` (BLACKROLL). Use the cloudId returned by the resources tool. **Always exclude `status = "To Do"`** — those tickets aren't yet started so they shouldn't get logged time. (Statuses like Blocked, In Progress, Code Review, Done are fine.)
 
 2. **Build an input JSON** for the script:
    ```json
@@ -36,17 +36,19 @@ Automates weekly Clockify time entries from Jira tickets assigned to the user.
 4. **Post for real** only after confirmation (drop `--dry-run`). The script refuses to post on days that already have Clockify entries unless `--force` is passed.
 
 ## What the script does
-- Reads `config.json` (Clockify API key, project name, timezone, workday start).
-- Resolves workspace + the configured project (`Development: Project Dept`) and its tasks.
-- Distributes `--hours-per-day` (default 8) evenly across the issues active on each weekday.
+- Reads `config.json` (Clockify API key, workspace/project/task IDs, timezone, workday start).
+- Sorts issues by Jira `updated` ascending (oldest first).
+- Chunks them into weekday buckets of up to `--max-per-day` tickets (default 1; was experimented with 2 but the user prefers one ticket per day to match "finish one, then go to next").
+- Each bucket's tickets share the day's `--hours-per-day` evenly. With 1/day each ticket gets a full 8h block.
 - Writes entries with:
   - **description**: `BLAC-XXXX - <Jira summary>`
-  - **projectId** / **taskId**: from the configured project (task matched by issue key in name, else the first active task).
-  - **start / end**: weekday working hours starting at `workday_start_hour`.
+  - **projectId** / **taskId**: from `config.json`.
+  - **start / end**: consecutive weekday slots starting at `workday_start_hour`.
 
 ## Flags
 - `--issues-json PATH` (or `-` / stdin) — required input
 - `--hours-per-day 8` — daily target
+- `--max-per-day 1` — max tickets per weekday (use 2 if you want pairs)
 - `--dry-run` — print plan without writing
 - `--force` — post even if day already has entries
 
