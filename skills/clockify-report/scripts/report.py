@@ -150,8 +150,8 @@ def chunk_issues_into_days(issues: list[dict], num_days: int, max_per_day: int =
     if n <= num_days:
         sizes = [1] * n + [0] * (num_days - n)
     else:
-        extras = n - num_days
-        sizes = [2 if i < extras else 1 for i in range(num_days)]
+        base, extras = divmod(n, num_days)
+        sizes = [base + 1 if i < extras else base for i in range(num_days)]
     chunks: list[list[dict]] = []
     cursor = 0
     for size in sizes:
