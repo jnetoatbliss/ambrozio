@@ -132,9 +132,11 @@ def issue_updated_date(issue: dict, tz: ZoneInfo) -> date | None:
     return dt.astimezone(tz).date()
 
 
-def chunk_issues_into_days(issues: list[dict], num_days: int, max_per_day: int = 2) -> list[list[dict]]:
+def chunk_issues_into_days(issues: list[dict], num_days: int, max_per_day: int | None = None) -> list[list[dict]]:
     """Pack issues into `num_days` buckets with up to `max_per_day` issues each.
 
+    `max_per_day=None` means "auto": fit every issue across the available days
+    (ceil(n / num_days), minimum 1).
     Front-loads days to `max_per_day` items, leaving fewer-item buckets at the end.
     Order is preserved (caller is expected to sort by Jira `updated` ascending so
     older work lands earlier in the week — matching "finish one, then next").
@@ -142,6 +144,8 @@ def chunk_issues_into_days(issues: list[dict], num_days: int, max_per_day: int =
     if num_days <= 0:
         return []
     n = len(issues)
+    if max_per_day is None:
+        max_per_day = max(1, -(-n // num_days))
     if n > num_days * max_per_day:
         raise ValueError(
             f"too many issues ({n}) for {num_days} days at max {max_per_day}/day; "
@@ -168,7 +172,7 @@ def plan_week(
     hours_per_day: float,
     tz: ZoneInfo,
     day_start_hour: int,
-    max_per_day: int = 2,
+    max_per_day: int | None = None,
 ) -> list[PlannedEntry]:
     if not issues:
         return []
@@ -261,7 +265,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Post Clockify time entries from a Jira issue list")
     parser.add_argument("--issues-json", help="Path to issues JSON (use '-' or omit for stdin)")
     parser.add_argument("--hours-per-day", type=float, default=8.0)
-    parser.add_argument("--max-per-day", type=int, default=1, help="max tickets per weekday (default 1)")
+    parser.add_argument(
+        "--max-per-day",
+        type=int,
+        default=None,
+        help="max tickets per weekday (default: auto, fit all tickets across the week)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true", help="create entries even if day already has logged time")
     args = parser.parse_args()

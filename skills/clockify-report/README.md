@@ -1,13 +1,14 @@
 # clockify-report
 
-Claude Code skill that fills in your weekly Clockify timesheet from the Jira tickets assigned to you. It pulls issues via the Atlassian MCP, packs them sequentially into weekdays (1 ticket / 8h block per day by default), and posts the entries to Clockify under the project/task you're allocated to.
+Claude Code skill that fills in your weekly Clockify timesheet from the Jira tickets you worked on. It pulls issues via the Atlassian MCP by **status history** (tickets you transitioned that week, even if QA now owns them), packs them sequentially into weekdays, and posts the entries to Clockify under the project/task you're allocated to.
 
 ## What it does
 
 - **Description** is built as `BLAC-XXXX - <Jira summary>` for each entry.
 - **Project / Task** are pre-configured by IDs in `config.json` (no fragile name lookups).
-- **Distribution**: tickets are sorted by Jira `updated` ascending (oldest first), then chunked into weekday buckets of up to `--max-per-day` tickets. Default is **1 ticket per day** (8h block), matching a "finish one, then go to next" workflow. Use `--max-per-day 2` to pair tickets at 4h each.
-- **Filtering**: tickets in Jira status `To Do` are excluded by Claude at the JQL step — they haven't been started, so they shouldn't get logged time.
+- **Distribution**: tickets are sorted by Jira `updated` ascending (oldest first), then chunked into weekday buckets. By default every ticket is fitted across the week (`ceil(n / weekdays)` per day, sharing the 8h evenly). Pass `--max-per-day N` to cap it.
+- **Filtering**: Claude drops Android subtasks, parent stories, cancelled tickets, `To Do` tickets, and anything whose changelog shows the work happened in an earlier week.
+- **Gap check**: `scripts/check_week.py` lists what Clockify already has and flags empty weekdays, so a missed Friday gets included in the next run.
 - **Safety**: refuses to post on any weekday that already has Clockify entries unless `--force` is passed.
 
 ## Layout
@@ -19,7 +20,9 @@ skills/clockify-report/
 ├── config.example.json   # template — copy to config.json and fill in
 ├── config.json           # local secrets (gitignored)
 └── scripts/
-    └── report.py         # Clockify-only poster (Jira is pulled by Claude via MCP)
+    ├── report.py         # Clockify-only poster (Jira is pulled by Claude via MCP)
+    ├── check_week.py     # list existing entries per weekday, flag gaps
+    └── discover_ids.py   # one-off: find workspace/project/task IDs
 ```
 
 ## First-time setup
@@ -88,11 +91,21 @@ In any Claude Code session, just ask:
 > "sync jira to clockify for last week"
 
 Claude will:
-1. Look up your accessible Atlassian sites and your account.
-2. Run a JQL like `project = BLAC AND assignee = currentUser() AND status != "To Do" AND updated >= "<monday>" ORDER BY updated ASC`.
-3. Build `/tmp/clockify-week.json` with the issues.
-4. Run `report.py --dry-run` and show you the plan.
-5. Wait for your confirmation, then re-run without `--dry-run`.
+1. Run `check_week.py` to see what is already logged and whether the previous Friday is missing.
+2. Run a JQL like `project = BLAC AND status CHANGED BY currentUser() DURING ("<monday>", "<next monday>") ORDER BY updated ASC` (slash dates, exclusive end).
+3. Filter out Android subtasks, parent stories, cancelled tickets, and prior-week work (verified via the issue changelog).
+4. Build an issues JSON (plus a one-day file for any missed Friday).
+5. Run `report.py --dry-run` and list every planned entry.
+6. Wait for your confirmation, then re-run without `--dry-run`.
+
+Why status history and not assignee: on BLAC a finished bug is reassigned to QA the same day, so by Monday `assignee = currentUser()` only returns the tickets still open on your side.
+
+### Checking for gaps
+
+```bash
+python3 scripts/check_week.py                         # last Monday .. today
+python3 scripts/check_week.py --from 2026-10-02 --to 2026-10-09
+```
 
 ### Manually (no Claude)
 
@@ -125,7 +138,7 @@ python3 scripts/report.py --issues-json /tmp/clockify-week.json
 |---|---|---|
 | `--issues-json PATH` | — | path to the input JSON, or `-` for stdin |
 | `--hours-per-day N` | `8.0` | total hours to distribute per weekday |
-| `--max-per-day N` | `1` | max tickets logged per weekday; `2` pairs them at 4h each |
+| `--max-per-day N` | auto | cap tickets per weekday; auto fits all tickets across the week |
 | `--dry-run` | off | print the plan without writing to Clockify |
 | `--force` | off | post even if a day already has Clockify entries |
 
